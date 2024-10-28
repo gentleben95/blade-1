@@ -1,0 +1,29 @@
+# deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: adoweather-deployment
+  namespace: adoweather-namespace
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: adoweather
+  template:
+    metadata:
+      labels:
+        app: adoweather
+    spec:
+      containers:
+      - name: adoweatherservice
+        image: __ACR_NAME__.azurecr.io/adoweatherservice:__TAG__
+        imagePullPolicy: Always
+        resources:
+          requests:
+            memory: "50Mi"
+            cpu: "50m"
+          limits:
+            memory: "256Mi"
+            cpu: "50m"
+        ports:
+        - containerPort: 8080

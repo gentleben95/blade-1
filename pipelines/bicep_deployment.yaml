@@ -1,0 +1,44 @@
+trigger:
+- none
+
+pool:
+  vmImage: 'windows-latest'  # Changed to Windows
+
+variables:
+  - group: 'credentials'  # Variable group containing values such as azureServiceConnection, resourceGroup, location, and appName
+
+stages:
+- stage: Deploy
+  jobs:
+  - job: DeployInfrastructure
+    displayName: 'Deploy Infrastructure'
+    steps:
+    # Step 1: Check if the Resource Group exists, if not, create it
+    - task: AzureCLI@2
+      inputs:
+        azureSubscription: $(azureServiceConnection)
+        scriptType: 'ps'  # Changed from 'bash' to 'ps' for PowerShell
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          # Check if the resource group exists
+          $resourceGroupExists = az group exists -n $(resourceGroup)
+          Write-Host $resourceGroupExists
+          if ($resourceGroupExists -eq 'false') {
+            Write-Host "Resource group $(resourceGroup) does not exist. Creating it..."
+            az group create --name $(resourceGroup) --location $(location)
+          } else {
+            Write-Host "Resource group $(resourceGroup) already exists."
+          }
+
+    # Step 2: Deploy the infrastructure using Bicep
+    - task: AzureCLI@2
+      inputs:
+        azureSubscription: $(azureServiceConnection)
+        scriptType: 'ps'  # Changed from 'bash' to 'ps' for PowerShell
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          az deployment group create `
+            --resource-group $(resourceGroup) `
+            --name "infraDeployment" `
+            --template-file $(System.DefaultWorkingDirectory)/bicep/simpleMain.bicep `
+            --parameters location=$(location) appName=$(appName)

@@ -1,0 +1,11 @@
+{
+  "Version": 1,
+  "Hash": "Ejd2Xpcesed4+98y62xlipxYwng8LcrIG70eiRviRC4=",
+  "Source": "AdoWeatherService",
+  "BasePath": "_content/AdoWeatherService",
+  "Mode": "Default",
+  "ManifestType": "Build",
+  "ReferencedProjectsConfiguration": [],
+  "DiscoveryPatterns": [],
+  "Assets": []
+}
