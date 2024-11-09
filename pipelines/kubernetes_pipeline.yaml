@@ -4,7 +4,7 @@ trigger:
 variables:
   - group: credentials 
   - group: aks_prod 
-  - name: TAG
+  - name: tag
     value: $(Build.BuildId)
 
 stages:
@@ -22,7 +22,7 @@ stages:
               scriptType: 'bash'
               scriptLocation: 'inlineScript'
               inlineScript: |
-                az acr login --name $(ACR_NAME)
+                az acr login --name $(acrName)
 
           - task: Docker@2
             inputs:
@@ -32,7 +32,7 @@ stages:
               buildContext: '.'
               dockerfile: 'AdoWeatherService/Dockerfile'
               tags: |
-                $(TAG)
+                $(tag)
 
 
   - stage: Deploy
@@ -53,8 +53,8 @@ stages:
                       pwd
                       ls
                       $deploymentFile = 'kubernetes\deployment.yaml'
-                      (Get-Content $deploymentFile) -replace '__ACR_NAME__', '$(ACR_NAME)' `
-                                                       -replace '__TAG__', '$(TAG)' | `
+                      (Get-Content $deploymentFile) -replace '__ACR_NAME__', '$(acrName)' `
+                                                       -replace '__TAG__', '$(tag)' | `
                       Set-Content $deploymentFile
 
                 - task: AzureCLI@2
