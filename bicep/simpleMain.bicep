@@ -75,24 +75,7 @@ resource keyVault 'Microsoft.KeyVault/vaults@2021-04-01-preview' = {
   }
 }
 
-// Apply Kubernetes namespace via Kubernetes Configuration
-resource k8sNamespaceConfig 'Microsoft.ContainerService/managedClusters/kubernetesConfiguration@2021-05-01' = {
-  name: 'namespace-config'
-  parent: aks
-  properties: {
-    operatorInstanceName: 'namespace-deployment'
-    operatorNamespace: 'kube-system'
-    operatorParams: '--namespace ${appName}-namespace'
-    operatorScope: 'cluster'
-    operatorType: 'Flux'
-    releaseNamespace: '${appName}-namespace' // Name of the namespace to create
-    operatorVersion: '1.0.0'
-    configurationProtectedSettings: {
-      secretName: 'namespace-secret'
-    }
-    enableNamespaceResources: true
-  }
-}
+
 // Outputs
 output acrLoginServer string = acr.properties.loginServer
 output aksClusterName string = aks.name
