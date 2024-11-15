@@ -1,8 +1,14 @@
 trigger:
 - none
 
-pool:
-  vmImage: 'windows-latest'  # Changed to Windows
+# If you use self hosted agent insert your Custom Agent Pool name
+pool: 
+   name: "MySelfHostedAgent"
+
+# If you use hosted agent from Azure, uncomment this delete pool above
+
+# pool:
+#      vmImage: 'ubuntu-latest'
 
 variables:
   - group: 'credentials'  # Variable group containing values such as azureServiceConnection, resourceGroup, location, and appName
