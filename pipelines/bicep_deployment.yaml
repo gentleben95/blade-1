@@ -6,7 +6,6 @@ pool:
    name: "MySelfHostedAgent"
 
 # If you use hosted agent from Azure, uncomment this delete pool above
-
 # pool:
 #      vmImage: 'ubuntu-latest'
 
@@ -23,7 +22,7 @@ stages:
     - task: AzureCLI@2
       inputs:
         azureSubscription: $(azureServiceConnection)
-        scriptType: 'ps'  # Changed from 'bash' to 'ps' for PowerShell
+        scriptType: 'ps' 
         scriptLocation: 'inlineScript'
         inlineScript: |
           # Check if the resource group exists
@@ -40,7 +39,7 @@ stages:
     - task: AzureCLI@2
       inputs:
         azureSubscription: $(azureServiceConnection)
-        scriptType: 'ps'  # Changed from 'bash' to 'ps' for PowerShell
+        scriptType: 'ps'
         scriptLocation: 'inlineScript'
         inlineScript: |
           az deployment group create `
