@@ -1,6 +1,15 @@
 trigger:
 - none
 
+# If you use self hosted agent insert your Custom Agent Pool name
+pool: 
+   name: "MySelfHostedAgent"
+
+# If you use hosted agent from Azure, uncomment this delete pool above
+
+# pool:
+#      vmImage: 'ubuntu-latest'
+
 variables:
   - group: credentials 
   - group: aks_prod 
@@ -11,60 +20,52 @@ stages:
   - stage: Build
     jobs:
       - job: BuildDockerImage
-        pool:
-          vmImage: 'ubuntu-latest'
         steps:
           - checkout: self
 
           - task: AzureCLI@2
+            displayName: 'Login + Docker Build+Push'
             inputs:
               azureSubscription: $(azureServiceConnection)
-              scriptType: 'bash'
+              scriptType: 'pscore'  # Use PowerShell Core instead of Bash
               scriptLocation: 'inlineScript'
               inlineScript: |
                 az acr login --name $(acrName)
-
-          - task: Docker@2
-            inputs:
-              containerRegistry: $(acrServiceConnection)
-              repository: $(imageName)
-              command: 'buildAndPush'
-              buildContext: '.'
-              dockerfile: 'AdoWeatherService/Dockerfile'
-              tags: |
-                $(tag)
-
+                Write-Host "Current Directory:" (Get-Location)
+                Get-ChildItem  # Equivalent to 'ls' in Bash
+                docker build -t $(acrName).azurecr.io/$(appName):$(tag) -f AdoWeatherService/Dockerfile .
+                docker push $(acrName).azurecr.io/$(appName):$(tag)
 
   - stage: Deploy
     dependsOn: Build
     jobs:
       - deployment: DeployToAKS
-        pool:
-          vmImage: 'ubuntu-latest'
         environment: 'production'
         strategy:
           runOnce:
             deploy:
               steps:
+                - checkout: self
                 - task: PowerShell@2
+                  displayName: 'Update Deployment YAML for AKS'
                   inputs:
                     targetType: 'inline'
                     script: |
-                      pwd
-                      ls
+                      Write-Host "Current Directory:" (Get-Location)
+                      Get-ChildItem  # Equivalent to 'ls' in Bash
                       $deploymentFile = 'kubernetes\deployment.yaml'
                       (Get-Content $deploymentFile) -replace '__ACR_NAME__', '$(acrName)' `
-                                                       -replace '__TAG__', '$(tag)' | `
+                                                     -replace '__TAG__', '$(tag)' | `
                       Set-Content $deploymentFile
 
                 - task: AzureCLI@2
                   displayName: Apply Config to AKS
                   inputs:
                     azureSubscription: $(azureServiceConnection)
-                    scriptType: 'bash'
+                    scriptType: 'pscore'  # Use PowerShell Core instead of Bash
                     scriptLocation: 'inlineScript'
                     inlineScript: |
-                      az aks get-credentials --name $('aks-' + '$(appName)') --resource-group $(resourceGroupName) --overwrite-existing
+                      az aks get-credentials --name $('aks-' + '$(appName)') --resource-group $(resourceGroup) --overwrite-existing
                       kubectl apply -f kubernetes/namespace.yaml
                       kubectl config set-context --current --namespace=$(appName)-namespace
                       kubectl apply -f kubernetes/deployment.yaml -f kubernetes/service.yaml
