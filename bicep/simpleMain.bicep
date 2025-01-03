@@ -1,82 +1,161 @@
-@description('Specifies the location in which the Azure resources should be deployed.')
-param location string = resourceGroup().location
-param appName string
+trigger:
+- none
 
-// Define the Azure Container Registry (ACR)
-resource acr 'Microsoft.ContainerRegistry/registries@2021-06-01-preview' = {
-  name: toLower('acr${appName}')
-  location: location
-  sku: {
-    name: 'Basic'
-  }
-  properties: {
-    adminUserEnabled: true
-  }
-}
+pool: 
+  name: "CustomPool1"
 
-// Define the AKS cluster
-resource aks 'Microsoft.ContainerService/managedClusters@2021-05-01' = {
-  name: 'aks-${appName}'
-  location: location
-  identity: {
-    type: 'SystemAssigned'
-  }
-  properties: {
-    dnsPrefix: 'aksdns'
-    enableRBAC: true
-    agentPoolProfiles: [
-      {
-        name: 'agentpool'
-        count: 1 // Could be parameterized
-        vmSize: 'Standard_B2s' // Could be parameterized
-        maxPods: 30
-        type: 'VirtualMachineScaleSets'
-        mode: 'System'
-        osType: 'Linux'
-        osDiskSizeGB: 30
-      }
-    ]
-  }
-}
+variables:
+- group: DevOps-Prod
+- group: DevOps-Dev
+- group: 'credentials'
+- name: tag
+  value: '$(Build.BuildId)'
 
-// Role assignment for AKS to pull from ACR
-resource acrRoleAssignment 'Microsoft.Authorization/roleAssignments@2020-10-01-preview' = {
-  name: guid(resourceGroup().id, aks.name, '7f951dda-4ed3-4680-a7ca-43fe172d538d')
-  scope: acr
-  properties: {
-    principalId: aks.identity.principalId
-    principalType: 'ServicePrincipal'
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
-  }
-}
+stages:
+# Stage 1: Deploy to Development
+- stage: DeployDev
+  displayName: 'Deploy to Development Environment'
+  jobs:
+  - deployment: DeployToDev
+    environment:
+      name: Development
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          # Step 0: Checkout repository
+          - checkout: self
+            clean: true
 
-// Define the Key Vault
-resource keyVault 'Microsoft.KeyVault/vaults@2021-04-01-preview' = {
-  name: 'kv-${appName}'
-  location: location
-  properties: {
-    sku: {
-      family: 'A'
-      name: 'standard'
-    }
-    tenantId: subscription().tenantId
-    accessPolicies: [
-      {
-        tenantId: subscription().tenantId
-        objectId: aks.identity.principalId
-        permissions: {
-          secrets: [
-            'get'
-            'list'
-          ]
-        }
-      }
-    ]
-  }
-}
+          # Step 1: Check Required Tools
+          - task: PowerShell@2
+            displayName: 'Check Required Tools'
+            inputs:
+              targetType: 'inline'
+              script: |
+                if (-not (Get-Command 'az' -ErrorAction SilentlyContinue)) {
+                  Write-Host "Azure CLI is not installed. Installing Azure CLI..."
+                  Invoke-WebRequest -Uri https://aka.ms/installazurecliwindows -OutFile .\AzureCLI.msi
+                  Start-Process msiexec.exe -ArgumentList '/i AzureCLI.msi /quiet' -Wait
+                }
+
+                if (-not (Get-Command 'docker' -ErrorAction SilentlyContinue)) {
+                  Write-Host "Docker is not installed. Please install Docker."
+                  exit 1
+                }
+
+                if (-not (Get-Command 'kubectl' -ErrorAction SilentlyContinue)) {
+                  Write-Host "kubectl is not installed. Installing kubectl..."
+                  Invoke-WebRequest -Uri https://dl.k8s.io/release/v1.27.0/bin/windows/amd64/kubectl.exe -OutFile .\kubectl.exe
+                  Move-Item -Path .\kubectl.exe -Destination "$Env:ProgramFiles\kubectl.exe"
+                  $env:Path += ";$Env:ProgramFiles"
+                }
+
+                Write-Host "All required tools are installed."
+
+          # Step 2: Publish Deployment Files as Artifact
+          - task: PublishPipelineArtifact@1
+            displayName: 'Publish Deployment Files as Artifact'
+            inputs:
+              targetPath: $(System.DefaultWorkingDirectory)/kubernetes
+              artifactName: deployment-files
+
+          # Step 3: Update Deployment YAML for Development
+          - task: PowerShell@2
+            displayName: 'Update Deployment YAML for Development'
+            inputs:
+              targetType: 'inline'
+              script: |
+                $deploymentFile = "$(System.DefaultWorkingDirectory)/kubernetes/deployment.yaml"
+                (Get-Content $deploymentFile) -replace '__ACR_NAME__', 'acr$(dev_appName)' `
+                                              -replace '__TAG__', '$(tag)' `
+                                              -replace '__APP_NAME__', '$(dev_appName)' | `
+                Set-Content $deploymentFile
+
+          # Step 4: Build and Push Docker Image
+          - task: AzureCLI@2
+            displayName: 'Login and Build+Push Docker Image'
+            inputs:
+              azureSubscription: $(dev_azureServiceConnection)
+              scriptType: 'pscore' 
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                az acr login --name "acr$(dev_appName)"
+                Write-Host "Building Docker Image"
+                docker build -t acr$(dev_appName).azurecr.io/$(dev_appName):$(tag) -f AdoWeatherService/Dockerfile .
+                Write-Host "Pushing Docker Image"
+                docker push acr$(dev_appName).azurecr.io/$(dev_appName):$(tag)
+
+          # Step 5: Apply Configuration to AKS
+          - task: AzureCLI@2
+            displayName: 'Apply Config to AKS'
+            inputs:
+              azureSubscription: $(dev_azureServiceConnection)
+              scriptType: 'pscore'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                az aks get-credentials --name "aks-$(dev_appName)" --resource-group $(dev_resourceGroup) --overwrite-existing
+                kubectl apply -f $(System.DefaultWorkingDirectory)/kubernetes/namespace.yaml
+                kubectl config set-context --current --namespace=$(dev_appName)-namespace
+                kubectl apply -f $(System.DefaultWorkingDirectory)/kubernetes/deployment.yaml -f $(System.DefaultWorkingDirectory)/kubernetes/service.yaml
 
 
-// Outputs
-output acrLoginServer string = acr.properties.loginServer
-output aksClusterName string = aks.name
-output keyVaultUri string = keyVault.properties.vaultUri
+
+
+# Stage 2: Deploy to Production
+- stage: DeployProd
+  displayName: 'Deploy to Production Environment'
+  dependsOn: DeployDev
+  condition: and(succeeded('DeployDev'), eq(variables['Build.SourceBranchName'], 'main'))
+  jobs:
+  - deployment: DeployToProd
+    environment:
+      name: Production
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - checkout: none
+          # Step 0: Download Deployment Files from Dev
+          - task: DownloadPipelineArtifact@2
+            displayName: 'Download Deployment Files'
+            inputs:
+              artifact: deployment-files
+              path: $(System.DefaultWorkingDirectory)/kubernetes
+
+          # Step 1: Update Deployment YAML for Production
+          - task: PowerShell@2
+            displayName: 'Update Deployment YAML for Production'
+            inputs:
+              targetType: 'inline'
+              script: |
+                $deploymentFile = "$(System.DefaultWorkingDirectory)/kubernetes/deployment.yaml"
+                (Get-Content $deploymentFile) -replace '__ACR_NAME__', '$(prod_appName)' `
+                                               -replace '__TAG__', '$(tag)' `
+                                                -replace '__APP_NAME__', '$(prod_appName)' | `
+                Set-Content $deploymentFile
+          - task: AzureCLI@2
+            displayName: 'Login and Build+Push Docker Image'
+            inputs:
+              azureSubscription: $(prod_azureServiceConnection)
+              scriptType: 'pscore' 
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                az acr login --name "acr$(prod_appName)"
+                Write-Host "Building Docker Image"
+                docker build -t acr$(prod_appName).azurecr.io/$(prod_appName):$(tag) -f AdoWeatherService/Dockerfile .
+                Write-Host "Pushing Docker Image"
+                docker push acr$(prod_appName).azurecr.io/$(prod_appName):$(tag)
+
+          # Step 2: Apply Configuration to AKS
+          - task: AzureCLI@2
+            displayName: 'Apply Config to AKS'
+            inputs:
+              azureSubscription: $(prod_azureServiceConnection)
+              scriptType: 'pscore'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                az aks get-credentials --name "aks-$(prod_appName)" --resource-group $(prod_resourceGroup) --overwrite-existing
+                kubectl apply -f $(System.DefaultWorkingDirectory)/kubernetes/namespace.yaml
+                kubectl config set-context --current --namespace=$(prod_appName)-namespace
+                kubectl apply -f $(System.DefaultWorkingDirectory)/kubernetes/deployment.yaml -f $(System.DefaultWorkingDirectory)/kubernetes/service.yaml
