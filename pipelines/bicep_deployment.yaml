@@ -1,8 +1,9 @@
 trigger:
 - none
 
-pool: 
-  name: "CustomPool1"
+
+pool:
+  name: CustomPool1
 
 variables:
 - group: DevOps-Prod
@@ -10,201 +11,116 @@ variables:
 - group: 'credentials'
 - name: tag
   value: '$(Build.BuildId)'
-
+  
 stages:
-# Stage 1: Deploy to Development
 - stage: DeployDev
-  displayName: 'Deploy to Development Environment'
+  displayName: 'Deploy to Dev environment'
   jobs:
-  - deployment: DeployToDev
+  - deployment: DeployDevInfrastructure
     environment:
       name: Development
     strategy:
       runOnce:
         deploy:
           steps:
-          # Step 0: Checkout repository
+          # Step 0: Checkout means "download" the repository from ADO
           - checkout: self
-            clean: true
 
-          # Step 1: Check Required Tools
+          # Step 1: Check if required Azure CLI modules and other tools are installed
           - task: PowerShell@2
             displayName: 'Check Required Tools'
             inputs:
               targetType: 'inline'
               script: |
+                # Check if Azure CLI is installed
                 if (-not (Get-Command 'az' -ErrorAction SilentlyContinue)) {
                   Write-Host "Azure CLI is not installed. Installing Azure CLI..."
                   Invoke-WebRequest -Uri https://aka.ms/installazurecliwindows -OutFile .\AzureCLI.msi
                   Start-Process msiexec.exe -ArgumentList '/i AzureCLI.msi /quiet' -Wait
                 }
-
-                if (-not (Get-Command 'docker' -ErrorAction SilentlyContinue)) {
-                  Write-Host "Docker is not installed. Please install Docker."
-                  exit 1
-                }
-
-                if (-not (Get-Command 'kubectl' -ErrorAction SilentlyContinue)) {
-                  Write-Host "kubectl is not installed. Installing kubectl..."
-                  Invoke-WebRequest -Uri https://dl.k8s.io/release/v1.27.0/bin/windows/amd64/kubectl.exe -OutFile .\kubectl.exe
-                  Move-Item -Path .\kubectl.exe -Destination "$Env:ProgramFiles\kubectl.exe"
-                  $env:Path += ";$Env:ProgramFiles"
-                }
-
                 Write-Host "All required tools are installed."
 
-          # Step 2: Publish Deployment Files as Artifact
-          - task: PublishPipelineArtifact@1
-            displayName: 'Publish Deployment Files as Artifact'
-            inputs:
-              targetPath: $(System.DefaultWorkingDirectory)/kubernetes
-              artifactName: deployment-files
-
-          # Step 3: Update Deployment YAML for Development
           - task: PowerShell@2
-            displayName: 'Update Deployment YAML for Development'
+            displayName: 'Print Environment Variables'
             inputs:
               targetType: 'inline'
               script: |
-                $deploymentFile = "$(System.DefaultWorkingDirectory)/kubernetes/deployment.yaml"
-                (Get-Content $deploymentFile) -replace '__ACR_NAME__', 'acr$(dev_appName)' `
-                                              -replace '__TAG__', '$(tag)' `
-                                              -replace '__APP_NAME__', '$(dev_appName)' | `
-                Set-Content $deploymentFile
+                Write-Host "Printing all environment variables:"
+                Get-ChildItem Env: | ForEach-Object { Write-Host "$($_.Name)=$($_.Value)" }
 
-          # Step 4: Build and Push Docker Image
+          # Step 2: Check if the Resource Group exists, if not, create it
           - task: AzureCLI@2
-            displayName: 'Login and Build+Push Docker Image'
+            displayName: 'Check Resource Group'
             inputs:
               azureSubscription: $(dev_azureServiceConnection)
-              scriptType: 'pscore' 
+              scriptType: 'ps'
               scriptLocation: 'inlineScript'
               inlineScript: |
-                az acr login --name "acr$(dev_appName)"
-                Write-Host "Building Docker Image"
-                docker build -t acr$(dev_appName).azurecr.io/$(dev_appName):$(tag) -f AdoWeatherService/Dockerfile .
-                Write-Host "Pushing Docker Image"
-                docker push acr$(dev_appName).azurecr.io/$(dev_appName):$(tag)
+                # Check if the resource group exists
+                $resourceGroupExists = az group exists -n $(dev_resourceGroup)
+                if ($resourceGroupExists -eq 'false') {
+                  Write-Host "Resource group $(dev_resourceGroup) does not exist. Creating it..."
+                  az group create --name $(dev_resourceGroup) --location $(dev_location)
+                } else {
+                  Write-Host "Resource group $(dev_resourceGroup) already exists."
+                }
 
-          # Step 5: Apply Configuration to AKS
+          # Step 3: Deploy the infrastructure using Bicep
           - task: AzureCLI@2
-            displayName: 'Apply Config to AKS'
+            displayName: 'Deploy Resources using Bicep'
             inputs:
               azureSubscription: $(dev_azureServiceConnection)
-              scriptType: 'pscore'
+              scriptType: 'ps'
               scriptLocation: 'inlineScript'
               inlineScript: |
-                az aks get-credentials --name "aks-$(dev_appName)" --resource-group $(dev_resourceGroup) --overwrite-existing
-                kubectl apply -f $(System.DefaultWorkingDirectory)/kubernetes/namespace.yaml
-                kubectl config set-context --current --namespace=$(dev_appName)-namespace
-                kubectl apply -f $(System.DefaultWorkingDirectory)/kubernetes/deployment.yaml -f $(System.DefaultWorkingDirectory)/kubernetes/service.yaml
+                $deploymentName = "infraDeployment-" + "$(tag)"
+                az deployment group create `
+                  --resource-group $(dev_resourceGroup) `
+                  --name $deploymentName `
+                  --template-file $(System.DefaultWorkingDirectory)/bicep/main.bicep `
+                  --parameters location=$(dev_location) appName=$(dev_appName) spnObjectId=$(dev_spnObjectId)
 
-
-
-
-# Stage 2: Deploy to Production
 - stage: DeployProd
-  displayName: 'Deploy to Production Environment'
-  dependsOn: DeployDev
+  displayName: 'Deploy to Prod environment'
   condition: and(succeeded('DeployDev'), eq(variables['Build.SourceBranchName'], 'main'))
   jobs:
-  - deployment: DeployToProd
+  - deployment: DeployProdInfrastructure
     environment:
       name: Production
     strategy:
       runOnce:
         deploy:
           steps:
-          - checkout: none
-          # Step 0: Download Deployment Files from Dev
-          - task: DownloadPipelineArtifact@2
-            displayName: 'Download Deployment Files'
-            inputs:
-              artifact: deployment-files
-              path: $(System.DefaultWorkingDirectory)/kubernetes
-
-          # Step 1: Update Deployment YAML for Production
-          - task: PowerShell@2
-            displayName: 'Update Deployment YAML for Production'
-            inputs:
-              targetType: 'inline'
-              script: |
-                $deploymentFile = "$(System.DefaultWorkingDirectory)/kubernetes/deployment.yaml"
-                (Get-Content $deploymentFile) -replace '__ACR_NAME__', '$(prod_appName)' `
-                                               -replace '__TAG__', '$(tag)' `
-                                                -replace '__APP_NAME__', '$(prod_appName)' | `
-                Set-Content $deploymentFile
+          # We are not doing checkout, to be sure we use the same code as in Dev stage
+          
+          # Step 1: Check if the Resource Group exists, if not, create it
           - task: AzureCLI@2
-            displayName: 'Login and Build+Push Docker Image'
+            displayName: 'Check Resource Group'
             inputs:
               azureSubscription: $(prod_azureServiceConnection)
-              scriptType: 'pscore' 
+              scriptType: 'ps'
               scriptLocation: 'inlineScript'
               inlineScript: |
-                az acr login --name "acr$(prod_appName)"
-                Write-Host "Building Docker Image"
-                docker build -t acr$(prod_appName).azurecr.io/$(prod_appName):$(tag) -f AdoWeatherService/Dockerfile .
-                Write-Host "Pushing Docker Image"
-                docker push acr$(prod_appName).azurecr.io/$(prod_appName):$(tag)
+                # Check if the resource group exists
+                $resourceGroupExists = az group exists -n $(prod_resourceGroup)
+                if ($resourceGroupExists -eq 'false') {
+                  Write-Host "Resource group $(prod_resourceGroup) does not exist. Creating it..."
+                  az group create --name $(prod_resourceGroup) --location $(prod_location)
+                } else {
+                  Write-Host "Resource group $(prod_resourceGroup) already exists."
+                }
 
-          # Step 2: Apply Configuration to AKS
+          # Step 2: Deploy the infrastructure using Bicep
           - task: AzureCLI@2
-            displayName: 'Apply Config to AKS'
+            displayName: 'Deploy Resources using Bicep'
             inputs:
               azureSubscription: $(prod_azureServiceConnection)
-              scriptType: 'pscore'
+              scriptType: 'ps'
               scriptLocation: 'inlineScript'
               inlineScript: |
-                az aks get-credentials --name "aks-$(prod_appName)" --resource-group $(prod_resourceGroup) --overwrite-existing
-                kubectl apply -f $(System.DefaultWorkingDirectory)/kubernetes/namespace.yaml
-                kubectl config set-context --current --namespace=$(prod_appName)-namespace
-                kubectl apply -f $(System.DefaultWorkingDirectory)/kubernetes/deployment.yaml -f $(System.DefaultWorkingDirectory)/kubernetes/service.yaml
-trigger:
-- none
-
-# If you use self hosted agent insert your Custom Agent Pool name
-pool: 
-   name: "MySelfHostedAgent"
-
-# If you use hosted agent from Azure, uncomment this delete pool above
-# pool:
-#      vmImage: 'ubuntu-latest'
-
-variables:
-  - group: 'credentials'  # Variable group containing values such as azureServiceConnection, resourceGroup, location, and appName
-
-stages:
-- stage: Deploy
-  jobs:
-  - job: DeployInfrastructure
-    displayName: 'Deploy Infrastructure'
-    steps:
-    # Step 1: Check if the Resource Group exists, if not, create it
-    - task: AzureCLI@2
-      inputs:
-        azureSubscription: $(azureServiceConnection)
-        scriptType: 'ps' 
-        scriptLocation: 'inlineScript'
-        inlineScript: |
-          # Check if the resource group exists
-          $resourceGroupExists = az group exists -n $(resourceGroup)
-          Write-Host $resourceGroupExists
-          if ($resourceGroupExists -eq 'false') {
-            Write-Host "Resource group $(resourceGroup) does not exist. Creating it..."
-            az group create --name $(resourceGroup) --location $(location)
-          } else {
-            Write-Host "Resource group $(resourceGroup) already exists."
-          }
-
-    # Step 2: Deploy the infrastructure using Bicep
-    - task: AzureCLI@2
-      inputs:
-        azureSubscription: $(azureServiceConnection)
-        scriptType: 'ps'
-        scriptLocation: 'inlineScript'
-        inlineScript: |
-          az deployment group create `
-            --resource-group $(resourceGroup) `
-            --name "infraDeployment" `
-            --template-file $(System.DefaultWorkingDirectory)/bicep/simpleMain.bicep `
-            --parameters location=$(location) appName=$(appName)
+                $deploymentName = "infraDeployment-" + "$(tag)"
+                az deployment group create `
+                  --resource-group $(prod_resourceGroup) `
+                  --name $deploymentName `
+                  --template-file $(System.DefaultWorkingDirectory)/bicep/main.bicep `
+                  --parameters location=$(prod_location) appName=$(prod_appName) spnObjectId=$(prod_spnObjectId)
