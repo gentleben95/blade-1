@@ -5,8 +5,7 @@ pool:
   name: "CustomPool1"
 
 variables:
-- group: DevOps-Prod
-- group: DevOps-Dev
+- group: ServiceConnections
 - group: 'credentials'
 - name: tag
   value: '$(Build.BuildId)'
@@ -19,6 +18,8 @@ stages:
   - deployment: DeployToDev
     environment:
       name: Development
+    variables:
+    - group: DevOps-Dev
     strategy:
       runOnce:
         deploy:
@@ -67,9 +68,9 @@ stages:
               targetType: 'inline'
               script: |
                 $deploymentFile = "$(System.DefaultWorkingDirectory)/kubernetes/deployment.yaml"
-                (Get-Content $deploymentFile) -replace '__ACR_NAME__', 'acr$(dev_appName)' `
+                (Get-Content $deploymentFile) -replace '__ACR_NAME__', 'acr$(appName)' `
                                               -replace '__TAG__', '$(tag)' `
-                                              -replace '__APP_NAME__', '$(dev_appName)' | `
+                                              -replace '__APP_NAME__', '$(appName)' | `
                 Set-Content $deploymentFile
 
           # Step 4: Build and Push Docker Image
@@ -80,11 +81,11 @@ stages:
               scriptType: 'pscore' 
               scriptLocation: 'inlineScript'
               inlineScript: |
-                az acr login --name "acr$(dev_appName)"
+                az acr login --name "acr$(appName)"
                 Write-Host "Building Docker Image"
-                docker build -t acr$(dev_appName).azurecr.io/$(dev_appName):$(tag) -f AdoWeatherService/Dockerfile .
+                docker build -t acr$(appName).azurecr.io/$(appName):$(tag) -f AdoWeatherService/Dockerfile .
                 Write-Host "Pushing Docker Image"
-                docker push acr$(dev_appName).azurecr.io/$(dev_appName):$(tag)
+                docker push acr$(appName).azurecr.io/$(appName):$(tag)
 
           # Step 5: Apply Configuration to AKS
           - task: AzureCLI@2
@@ -94,9 +95,9 @@ stages:
               scriptType: 'pscore'
               scriptLocation: 'inlineScript'
               inlineScript: |
-                az aks get-credentials --name "aks-$(dev_appName)" --resource-group $(dev_resourceGroup) --overwrite-existing
+                az aks get-credentials --name "aks-$(appName)" --resource-group $(resourceGroup) --overwrite-existing
                 kubectl apply -f $(System.DefaultWorkingDirectory)/kubernetes/namespace.yaml
-                kubectl config set-context --current --namespace=$(dev_appName)-namespace
+                kubectl config set-context --current --namespace=$(appName)-namespace
                 kubectl apply -f $(System.DefaultWorkingDirectory)/kubernetes/deployment.yaml -f $(System.DefaultWorkingDirectory)/kubernetes/service.yaml
 
 
@@ -111,6 +112,8 @@ stages:
   - deployment: DeployToProd
     environment:
       name: Production
+    variables:
+    - group: DevOps-Dev
     strategy:
       runOnce:
         deploy:
@@ -130,9 +133,9 @@ stages:
               targetType: 'inline'
               script: |
                 $deploymentFile = "$(System.DefaultWorkingDirectory)/kubernetes/deployment.yaml"
-                (Get-Content $deploymentFile) -replace '__ACR_NAME__', '$(prod_appName)' `
+                (Get-Content $deploymentFile) -replace '__ACR_NAME__', '$(appName)' `
                                                -replace '__TAG__', '$(tag)' `
-                                                -replace '__APP_NAME__', '$(prod_appName)' | `
+                                                -replace '__APP_NAME__', '$(appName)' | `
                 Set-Content $deploymentFile
           - task: AzureCLI@2
             displayName: 'Login and Build+Push Docker Image'
@@ -141,11 +144,11 @@ stages:
               scriptType: 'pscore' 
               scriptLocation: 'inlineScript'
               inlineScript: |
-                az acr login --name "acr$(prod_appName)"
+                az acr login --name "acr$(appName)"
                 Write-Host "Building Docker Image"
-                docker build -t acr$(prod_appName).azurecr.io/$(prod_appName):$(tag) -f AdoWeatherService/Dockerfile .
+                docker build -t acr$(appName).azurecr.io/$(appName):$(tag) -f AdoWeatherService/Dockerfile .
                 Write-Host "Pushing Docker Image"
-                docker push acr$(prod_appName).azurecr.io/$(prod_appName):$(tag)
+                docker push acr$(appName).azurecr.io/$(appName):$(tag)
 
           # Step 2: Apply Configuration to AKS
           - task: AzureCLI@2
@@ -155,7 +158,7 @@ stages:
               scriptType: 'pscore'
               scriptLocation: 'inlineScript'
               inlineScript: |
-                az aks get-credentials --name "aks-$(prod_appName)" --resource-group $(prod_resourceGroup) --overwrite-existing
+                az aks get-credentials --name "aks-$(appName)" --resource-group $(resourceGroup) --overwrite-existing
                 kubectl apply -f $(System.DefaultWorkingDirectory)/kubernetes/namespace.yaml
-                kubectl config set-context --current --namespace=$(prod_appName)-namespace
+                kubectl config set-context --current --namespace=$(appName)-namespace
                 kubectl apply -f $(System.DefaultWorkingDirectory)/kubernetes/deployment.yaml -f $(System.DefaultWorkingDirectory)/kubernetes/service.yaml
