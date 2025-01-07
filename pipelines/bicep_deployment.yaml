@@ -6,8 +6,7 @@ pool:
   name: CustomPool1
 
 variables:
-- group: DevOps-Prod
-- group: DevOps-Dev
+- group: ServiceConnections
 - group: 'credentials'
 - name: tag
   value: '$(Build.BuildId)'
@@ -19,6 +18,8 @@ stages:
   - deployment: DeployDevInfrastructure
     environment:
       name: Development
+    variables:
+    - group: DevOps-Dev
     strategy:
       runOnce:
         deploy:
@@ -57,12 +58,12 @@ stages:
               scriptLocation: 'inlineScript'
               inlineScript: |
                 # Check if the resource group exists
-                $resourceGroupExists = az group exists -n $(dev_resourceGroup)
+                $resourceGroupExists = az group exists -n $(resourceGroup)
                 if ($resourceGroupExists -eq 'false') {
-                  Write-Host "Resource group $(dev_resourceGroup) does not exist. Creating it..."
-                  az group create --name $(dev_resourceGroup) --location $(dev_location)
+                  Write-Host "Resource group $(resourceGroup) does not exist. Creating it..."
+                  az group create --name $(resourceGroup) --location $(location)
                 } else {
-                  Write-Host "Resource group $(dev_resourceGroup) already exists."
+                  Write-Host "Resource group $(resourceGroup) already exists."
                 }
 
           # Step 3: Deploy the infrastructure using Bicep
@@ -75,10 +76,10 @@ stages:
               inlineScript: |
                 $deploymentName = "infraDeployment-" + "$(tag)"
                 az deployment group create `
-                  --resource-group $(dev_resourceGroup) `
+                  --resource-group $(resourceGroup) `
                   --name $deploymentName `
                   --template-file $(System.DefaultWorkingDirectory)/bicep/main.bicep `
-                  --parameters location=$(dev_location) appName=$(dev_appName) spnObjectId=$(dev_spnObjectId)
+                  --parameters location=$(location) appName=$(appName) spnObjectId=$(spnObjectId)
 
 - stage: DeployProd
   displayName: 'Deploy to Prod environment'
@@ -87,6 +88,8 @@ stages:
   - deployment: DeployProdInfrastructure
     environment:
       name: Production
+    variables:
+    - group: DevOps-Prod
     strategy:
       runOnce:
         deploy:
@@ -102,12 +105,12 @@ stages:
               scriptLocation: 'inlineScript'
               inlineScript: |
                 # Check if the resource group exists
-                $resourceGroupExists = az group exists -n $(prod_resourceGroup)
+                $resourceGroupExists = az group exists -n $(resourceGroup)
                 if ($resourceGroupExists -eq 'false') {
-                  Write-Host "Resource group $(prod_resourceGroup) does not exist. Creating it..."
-                  az group create --name $(prod_resourceGroup) --location $(prod_location)
+                  Write-Host "Resource group $(resourceGroup) does not exist. Creating it..."
+                  az group create --name $(resourceGroup) --location $(location)
                 } else {
-                  Write-Host "Resource group $(prod_resourceGroup) already exists."
+                  Write-Host "Resource group $(resourceGroup) already exists."
                 }
 
           # Step 2: Deploy the infrastructure using Bicep
@@ -120,7 +123,7 @@ stages:
               inlineScript: |
                 $deploymentName = "infraDeployment-" + "$(tag)"
                 az deployment group create `
-                  --resource-group $(prod_resourceGroup) `
+                  --resource-group $(resourceGroup) `
                   --name $deploymentName `
                   --template-file $(System.DefaultWorkingDirectory)/bicep/main.bicep `
-                  --parameters location=$(prod_location) appName=$(prod_appName) spnObjectId=$(prod_spnObjectId)
+                  --parameters location=$(location) appName=$(appName) spnObjectId=$(spnObjectId)
