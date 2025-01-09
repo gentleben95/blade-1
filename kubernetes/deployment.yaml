@@ -2,21 +2,21 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: adoweather-deployment
-  namespace: adoweather-namespace
+  name: blade-deployment
+  namespace: blade-namespace
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: adoweather
+      app: blade
   template:
     metadata:
       labels:
-        app: adoweather
+        app: blade
     spec:
       containers:
-      - name: adoweatherservice
-        image: __ACR_NAME__.azurecr.io/adoweatherservice:__TAG__
+      - name: bladeservice
+        image: __ACR_NAME__.azurecr.io/__APP_NAME__:__TAG__
         imagePullPolicy: Always
         resources:
           requests:
